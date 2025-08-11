@@ -46,7 +46,16 @@ class VectorEncoder(nn.Module):
         emb = self.fc3(x)
         return emb
 
-class VectorActionEncoder(nn.Module):
+class StateActionEncoder(nn.Module):
+    '''
+    first
+    encode obs into embedding 
+    encode action into embedding
+    next
+    concatenate both embeddings
+    second
+    pass through a MLP to get the final embedding
+    '''
     def __init__(self, obs_dim, action_dim, hidden_dim=512, emb_dim=256):
         super().__init__()
         self.fc1 = nn.Linear(obs_dim+action_dim, hidden_dim)
@@ -60,9 +69,7 @@ class VectorActionEncoder(nn.Module):
         emb = self.fc3(oa)
         return emb
 
-
 # -- Residual Bloack for PixelEncoder --
-
 def layer_init_normed(layer, norm_dim, scale=1.0):
     with torch.no_grad():
         layer.weight.data *= scale / layer.weight.norm(dim=norm_dim, p=2, keepdim=True)

@@ -1,52 +1,55 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from torch.distributions import Categorical
 
 class StateValueNet(nn.Module):
     def __init__(self, obs_dim, hidden_dim=512, emb_dim=256):
         super().__init__()
         self.fc1 = nn.Linear(obs_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, emb_dim)
+        self.fc3 = nn.Linear(hidden_dim, 1)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
-        emb = self.fc3(x)
-        return emb
+        state_value = self.fc3(x)
+        return state_value
 
-class ActionValueNet(nn.Module):
-    '''
-    state_emb_dim = obs_dim 
-    action_emb_dim = action_dim
-    '''
-    def __init__(self, obs_dim, action_dim, hidden_dim=512, emb_dim=256):
+class DiscreteQValueNet(nn.Module):
+    def __init__(self, state_emb_dim, action_num, hidden_dim=512):
         super().__init__()
-        self.fc1 = nn.Linear(obs_dim + action_dim, hidden_dim)
+        self.fc1 = nn.Linear(state_emb_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, emb_dim)
+        self.fc3 = nn.Linear(hidden_dim, action_num)
 
-    def forward(self, o, a):
-        oa = torch.cat([o, a], dim=1)
-        oa = torch.relu(self.fc1(oa))
-        oa = torch.relu(self.fc2(oa))
-        emb = self.fc3(oa)
-        return emb
+    def forward(self, s):
+        s = torch.relu(self.fc1(s))
+        s= torch.relu(self.fc2())
+        q_value_list = self.fc3(s)
+        return q_value_list
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.distributions import Normal
+class SingleQValueNet(nn.Module):
+    def __init__(self, state_emb_dim, action_emb_dim, hidden_dim=512):
+        super().__init__()
+        self.fc1 = nn.Linear(state_emb_dim + action_emb_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, 1)
+
+    def forward(self, s, a):
+        sa = torch.cat([s, a], dim=1)
+        sa = torch.relu(self.fc1(sa))
+        sa = torch.relu(self.fc2(sa))
+        action_value = self.fc3(sa)
+        return action_value
 
 class ContinuousPolicy(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_emb_dim, action_dim, hidden_dim=512):
         super(ContinuousPolicy, self).__init__()
-        self.fc1 = nn.Linear(state_dim, 256)
-        self.fc2 = nn.Linear(256, 256)
-        
-        # Output layers for mean and standard deviation
-        self.mean_layer = nn.Linear(256, action_dim)
-        # We learn the log of the standard deviation to ensure it's always positive.
-        self.log_std_layer = nn.Linear(256, action_dim)
+        self.fc1 = nn.Linear(state_emb_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.mean_layer = nn.Linear(hidden_dim, action_dim)
+        self.log_std_layer = nn.Linear(hidden_dim, action_dim)
 
     def forward(self, state):
         x = F.relu(self.fc1(state))
@@ -55,67 +58,36 @@ class ContinuousPolicy(nn.Module):
         # Get mean and log_std from the network's output
         mean = self.mean_layer(x)
         log_std = self.log_std_layer(x)
-        
-        # Clamp log_std to prevent it from becoming too large or small
         log_std = torch.clamp(log_std, min=-20, max=2)
         std = torch.exp(log_std)
-        
-        # Create a Normal distribution
         dist = Normal(mean, std)
         return dist
 
-# Example usage
-state_dim = 4
-action_dim = 2
-policy = ContinuousPolicy(state_dim, action_dim)
-state = torch.randn(1, state_dim)
-dist = policy(state)
-
-# Sample an action from the distribution
-action = dist.sample()
-# Calculate the log probability of the sampled action
-log_prob = dist.log_prob(action).sum(dim=-1)
-
-print(f"Sampled Action: {action}")
-print(f"Log Probability: {log_prob}")
-
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.distributions import Categorical
+    def sample(self, state):
+        dist = self.forward(state)
+        action = dist.sample()
+        log_prob = dist.log_prob(action).sum(dim=-1)
+        entropy = dist.entropy().sum(dim=-1)
+        return action, log_prob, entropy
 
 class DiscretePolicy(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_emb_dim, action_num, hidden_dim=512):
         super(DiscretePolicy, self).__init__()
-        self.fc1 = nn.Linear(state_dim, 256)
-        self.fc2 = nn.Linear(256, 256)
-        
-        # Output layer for the logits of each action
-        self.output_layer = nn.Linear(256, action_dim)
+        self.fc1 = nn.Linear(state_emb_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.output_layer = nn.Linear(hidden_dim, action_num)
 
     def forward(self, state):
         x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
-        
-        # Get the logits for each action
         logits = self.output_layer(x)
-        
-        # Create a Categorical distribution using the logits
         dist = Categorical(logits=logits)
         return dist
 
-# Example usage
-state_dim = 4
-action_dim = 3  # e.g., move left, move right, stay
-policy = DiscretePolicy(state_dim, action_dim)
-state = torch.randn(1, state_dim)
-dist = policy(state)
+    def sample(self, state):
+        dist = self.forward(state)
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+        entropy = dist.entropy()
+        return action, log_prob, entropy
 
-# Sample an action from the distribution
-action = dist.sample()
-# Calculate the log probability of the sampled action
-log_prob = dist.log_prob(action)
-
-print(f"Sampled Action: {action}")
-print(f"Log Probability: {log_prob}")
